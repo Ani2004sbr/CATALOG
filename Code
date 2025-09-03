@@ -1,346 +1,201 @@
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
 import java.math.BigInteger;
 import java.util.*;
 
 public class ShamirSecretSharing {
-
+    
+    /**
+     * Point class to represent (x, y) coordinates
+     */
     static class Point {
-        final BigInteger x, y;
+        BigInteger x, y;
         
         Point(BigInteger x, BigInteger y) {
-            if (x == null || y == null)
-                throw new IllegalArgumentException("Point coordinates cannot be null");
             this.x = x;
             this.y = y;
         }
         
-        @Override 
-        public String toString() { 
-            return "(" + x + "," + y + ")"; 
-        }
-        
-        @Override
-        public boolean equals(Object obj) {
-            if (this == obj) return true;
-            if (!(obj instanceof Point)) return false;
-            Point other = (Point) obj;
-            return x.equals(other.x) && y.equals(other.y);
-        }
-        
-        @Override
-        public int hashCode() {
-            return Objects.hash(x, y);
-        }
-    }
-
-    static class ShamirException extends RuntimeException {
-        public ShamirException(String msg) { super(msg); }
-        public ShamirException(String msg, Throwable cause) { super(msg, cause); }
-    }
-
-    /**
-     * Represents a rational number for exact arithmetic
-     */
-    static class Rational {
-        private BigInteger numerator;
-        private BigInteger denominator;
-        
-        public Rational(BigInteger numerator, BigInteger denominator) {
-            if (denominator.equals(BigInteger.ZERO)) {
-                throw new ArithmeticException("Denominator cannot be zero");
-            }
-            
-            // Normalize sign (denominator always positive)
-            if (denominator.signum() < 0) {
-                numerator = numerator.negate();
-                denominator = denominator.negate();
-            }
-            
-            // Reduce to lowest terms
-            BigInteger gcd = numerator.gcd(denominator);
-            this.numerator = numerator.divide(gcd);
-            this.denominator = denominator.divide(gcd);
-        }
-        
-        public Rational(BigInteger value) {
-            this(value, BigInteger.ONE);
-        }
-        
-        public Rational add(Rational other) {
-            BigInteger newNum = this.numerator.multiply(other.denominator)
-                    .add(other.numerator.multiply(this.denominator));
-            BigInteger newDen = this.denominator.multiply(other.denominator);
-            return new Rational(newNum, newDen);
-        }
-        
-        public Rational multiply(Rational other) {
-            return new Rational(
-                this.numerator.multiply(other.numerator),
-                this.denominator.multiply(other.denominator)
-            );
-        }
-        
-        public Rational multiply(BigInteger value) {
-            return new Rational(this.numerator.multiply(value), this.denominator);
-        }
-        
-        public boolean isInteger() {
-            return denominator.equals(BigInteger.ONE);
-        }
-        
-        public BigInteger toBigInteger() {
-            if (!isInteger()) {
-                throw new ArithmeticException("Cannot convert non-integer rational to BigInteger: " 
-                    + numerator + "/" + denominator);
-            }
-            return numerator;
-        }
-        
         @Override
         public String toString() {
-            if (isInteger()) {
-                return numerator.toString();
-            }
-            return numerator + "/" + denominator;
+            return "(" + x + ", " + y + ")";
         }
     }
-
+    
+    /**
+     * Convert a number from given base to decimal (BigInteger)
+     */
     public static BigInteger convertToDecimal(String value, int base) {
-        if (value == null || value.trim().isEmpty())
-            throw new ShamirException("Value cannot be null or empty");
-        if (base < 2 || base > 36)
-            throw new ShamirException("Base must be between 2 and 36, got: " + base);
+        return new BigInteger(value, base);
+    }
+    
+    /**
+     * Simple JSON parser for our specific format
+     */
+    public static Map<String, Object> parseJSON(String json) {
+        Map<String, Object> result = new HashMap<>();
         
-        // Validate characters for the given base
-        String cleanValue = value.trim().toLowerCase();
-        for (char c : cleanValue.toCharArray()) {
-            int digit = Character.digit(c, base);
-            if (digit == -1) {
-                throw new ShamirException("Invalid character '" + c + "' for base " + base);
+        // Remove whitespace and outer braces
+        json = json.trim().replaceAll("\\s+", "");
+        if (json.startsWith("{") && json.endsWith("}")) {
+            json = json.substring(1, json.length() - 1);
+        }
+        
+        // Split by top-level commas
+        List<String> parts = new ArrayList<>();
+        int braceCount = 0;
+        int start = 0;
+        
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '{') braceCount++;
+            else if (c == '}') braceCount--;
+            else if (c == ',' && braceCount == 0) {
+                parts.add(json.substring(start, i));
+                start = i + 1;
+            }
+        }
+        if (start < json.length()) {
+            parts.add(json.substring(start));
+        }
+        
+        for (String part : parts) {
+            int colonIndex = part.indexOf(':');
+            if (colonIndex > 0) {
+                String key = part.substring(0, colonIndex).replace("\"", "");
+                String value = part.substring(colonIndex + 1);
+                
+                if (value.startsWith("{") && value.endsWith("}")) {
+                    result.put(key, parseJSON(value));
+                } else {
+                    result.put(key, value.replace("\"", ""));
+                }
             }
         }
         
-        try {
-            return new BigInteger(cleanValue, base);
-        } catch (NumberFormatException e) {
-            throw new ShamirException("Invalid number '" + value + "' for base " + base, e);
-        }
+        return result;
     }
-
+    
+    /**
+     * Parse input and extract points
+     */
+    @SuppressWarnings("unchecked")
     public static List<Point> parseInput(String jsonInput) {
-        if (jsonInput == null || jsonInput.trim().isEmpty()) {
-            throw new ShamirException("JSON input cannot be null or empty");
+        Map<String, Object> json = parseJSON(jsonInput);
+        Map<String, Object> keys = (Map<String, Object>) json.get("keys");
+        int n = Integer.parseInt((String) keys.get("n"));
+        
+        List<Point> points = new ArrayList<>();
+        
+        for (int i = 1; i <= n; i++) {
+            String key = String.valueOf(i);
+            if (json.containsKey(key)) {
+                Map<String, Object> point = (Map<String, Object>) json.get(key);
+                int base = Integer.parseInt((String) point.get("base"));
+                String value = (String) point.get("value");
+                
+                BigInteger x = BigInteger.valueOf(i);
+                BigInteger y = convertToDecimal(value, base);
+                points.add(new Point(x, y));
+            }
         }
         
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode root = mapper.readTree(jsonInput);
-
-            if (!root.has("keys"))
-                throw new ShamirException("Missing 'keys' object");
-
-            JsonNode keys = root.get("keys");
-            if (!keys.has("n") || !keys.has("k"))
-                throw new ShamirException("Missing 'n' or 'k' in keys object");
-
-            int n = keys.get("n").asInt(-1);
-            int k = keys.get("k").asInt(-1);
-
-            if (n <= 0 || k <= 0) 
-                throw new ShamirException("'n' and 'k' must be positive integers, got n=" + n + ", k=" + k);
-            if (k > n) 
-                throw new ShamirException("'k' (" + k + ") cannot be greater than 'n' (" + n + ")");
-
-            List<Point> points = new ArrayList<>();
-            Set<BigInteger> xSet = new HashSet<>();
-
-            // Check all possible point indices (not just 1 to n)
-            Iterator<String> fieldNames = root.fieldNames();
-            while (fieldNames.hasNext()) {
-                String fieldName = fieldNames.next();
-                if ("keys".equals(fieldName)) continue;
-                
-                try {
-                    BigInteger x = new BigInteger(fieldName);
-                    JsonNode pointNode = root.get(fieldName);
-                    
-                    if (!pointNode.has("base") || !pointNode.has("value"))
-                        throw new ShamirException("Point " + fieldName + " missing 'base' or 'value' field");
-
-                    int base = pointNode.get("base").asInt(-1);
-                    String val = pointNode.get("value").asText();
-                    
-                    if (base < 2) 
-                        throw new ShamirException("Invalid base " + base + " for point " + fieldName);
-                    if (val == null || val.isEmpty()) 
-                        throw new ShamirException("Empty value for point " + fieldName);
-
-                    BigInteger y = convertToDecimal(val, base);
-
-                    if (!xSet.add(x))
-                        throw new ShamirException("Duplicate x-coordinate: " + x);
-
-                    points.add(new Point(x, y));
-                } catch (NumberFormatException e) {
-                    throw new ShamirException("Invalid point index: " + fieldName);
+        return points;
+    }
+    
+    /**
+     * Lagrange interpolation to find the constant term of polynomial
+     * This gives us f(0) which is the secret
+     */
+    public static BigInteger lagrangeInterpolation(List<Point> points, int k) {
+        // We only need k points for interpolation
+        List<Point> selectedPoints = points.subList(0, Math.min(k, points.size()));
+        
+        BigInteger result = BigInteger.ZERO;
+        
+        for (int i = 0; i < selectedPoints.size(); i++) {
+            Point pi = selectedPoints.get(i);
+            BigInteger term = pi.y;
+            
+            // Calculate Lagrange basis polynomial Li(0)
+            BigInteger numerator = BigInteger.ONE;
+            BigInteger denominator = BigInteger.ONE;
+            
+            for (int j = 0; j < selectedPoints.size(); j++) {
+                if (i != j) {
+                    Point pj = selectedPoints.get(j);
+                    // For f(0): numerator *= (0 - xj) = -xj
+                    numerator = numerator.multiply(pj.x.negate());
+                    // denominator *= (xi - xj)
+                    denominator = denominator.multiply(pi.x.subtract(pj.x));
                 }
             }
             
-            if (points.isEmpty()) {
-                throw new ShamirException("No valid points found in input");
-            }
-            
-            if (points.size() < k) {
-                throw new ShamirException("Insufficient points: found " + points.size() + ", need at least " + k);
-            }
-            
-            // Sort points by x-coordinate for consistency
-            points.sort(Comparator.comparing(p -> p.x));
-            
-            return points;
-            
-        } catch (Exception e) {
-            if (e instanceof ShamirException) throw (ShamirException) e;
-            throw new ShamirException("Failed to parse input JSON: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Lagrange interpolation using exact rational arithmetic
-     */
-    public static BigInteger lagrangeInterpolation(List<Point> points, int k) {
-        if (points == null || points.isEmpty())
-            throw new ShamirException("Points list cannot be null or empty");
-        if (points.size() < k)
-            throw new ShamirException("Not enough points for interpolation: need " + k + ", got " + points.size());
-
-        List<Point> selected = points.subList(0, k);
-        
-        // Verify no duplicate x-coordinates
-        Set<BigInteger> xCoords = new HashSet<>();
-        for (Point p : selected) {
-            if (!xCoords.add(p.x)) {
-                throw new ShamirException("Duplicate x-coordinate found: " + p.x);
-            }
-        }
-
-        Rational result = new Rational(BigInteger.ZERO);
-
-        for (int i = 0; i < selected.size(); i++) {
-            Point pi = selected.get(i);
-            
-            // Calculate Lagrange basis polynomial Li(0)
-            Rational basisValue = new Rational(BigInteger.ONE);
-            
-            for (int j = 0; j < selected.size(); j++) {
-                if (i == j) continue;
-                
-                Point pj = selected.get(j);
-                BigInteger diff = pi.x.subtract(pj.x);
-                
-                if (diff.equals(BigInteger.ZERO))
-                    throw new ShamirException("Duplicate x-values during interpolation: " + pi.x);
-                
-                // Li(0) *= (0 - xj) / (xi - xj) = -xj / (xi - xj)
-                Rational factor = new Rational(pj.x.negate(), diff);
-                basisValue = basisValue.multiply(factor);
-            }
-            
-            // Add yi * Li(0) to result
-            Rational term = basisValue.multiply(pi.y);
+            // term = yi * (numerator / denominator)
+            term = term.multiply(numerator).divide(denominator);
             result = result.add(term);
         }
         
-        // Result should be an integer for valid Shamir secret sharing
-        if (!result.isInteger()) {
-            throw new ShamirException("Interpolation result is not an integer: " + result + 
-                ". This may indicate corrupted data or need for finite field arithmetic.");
-        }
-        
-        return result.toBigInteger();
-    }
-
-    public static BigInteger solveSecret(String jsonInput) {
-        List<Point> points = parseInput(jsonInput);
-        
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode root = mapper.readTree(jsonInput);
-            int k = root.get("keys").get("k").asInt();
-            return lagrangeInterpolation(points, k);
-        } catch (Exception e) {
-            if (e instanceof ShamirException) throw (ShamirException) e;
-            throw new ShamirException("Failed to solve secret: " + e.getMessage(), e);
-        }
+        return result;
     }
     
     /**
-     * Enhanced solve method with debugging information
+     * Solve for the secret given JSON input
      */
-    public static void solveAndPrint(String testName, String jsonInput) {
-        System.out.println("\n=== " + testName + " ===");
+    @SuppressWarnings("unchecked")
+    public static BigInteger solveSecret(String jsonInput) {
+        Map<String, Object> json = parseJSON(jsonInput);
+        Map<String, Object> keys = (Map<String, Object>) json.get("keys");
+        int k = Integer.parseInt((String) keys.get("k"));
         
-        try {
-            List<Point> points = parseInput(jsonInput);
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode root = mapper.readTree(jsonInput);
-            
-            int n = root.get("keys").get("n").asInt();
-            int k = root.get("keys").get("k").asInt();
-            
-            System.out.println("Parameters: n=" + n + ", k=" + k);
-            System.out.println("Available points: " + points.size());
-            
-            for (int i = 0; i < Math.min(points.size(), 5); i++) {
-                System.out.println("  " + points.get(i));
-            }
-            if (points.size() > 5) {
-                System.out.println("  ... and " + (points.size() - 5) + " more points");
-            }
-            
-            long startTime = System.nanoTime();
-            BigInteger secret = lagrangeInterpolation(points, k);
-            long endTime = System.nanoTime();
-            
-            System.out.println("\nSecret (constant term): " + secret);
-            System.out.println("Computation time: " + String.format("%.3f ms", (endTime - startTime) / 1_000_000.0));
-            
-        } catch (Exception e) {
-            System.err.println("Error in " + testName + ": " + e.getMessage());
-            if (e.getCause() != null && !e.getMessage().contains(e.getCause().getMessage())) {
-                System.err.println("Caused by: " + e.getCause().getMessage());
-            }
+        List<Point> points = parseInput(jsonInput);
+        
+        if (points.size() < k) {
+            throw new IllegalArgumentException("Not enough points to reconstruct secret");
         }
+        
+        return lagrangeInterpolation(points, k);
     }
     
+    /**
+     * Test with the provided test cases
+     */
     public static void main(String[] args) {
-        System.out.println("=== Shamir's Secret Sharing Solver (Jackson Version) ===");
-        
         // Test Case 1
         String testCase1 = "{ \"keys\": { \"n\": 4, \"k\": 3 }, \"1\": { \"base\": \"10\", \"value\": \"4\" }, \"2\": { \"base\": \"2\", \"value\": \"111\" }, \"3\": { \"base\": \"10\", \"value\": \"12\" }, \"6\": { \"base\": \"4\", \"value\": \"213\" } }";
         
-        // Test Case 2  
+        System.out.println("=== TEST CASE 1 ===");
+        try {
+            List<Point> points1 = parseInput(testCase1);
+            System.out.println("Parsed points:");
+            for (Point p : points1) {
+                System.out.println("  " + p);
+            }
+            
+            BigInteger secret1 = solveSecret(testCase1);
+            System.out.println("Secret (constant term): " + secret1);
+        } catch (Exception e) {
+            System.out.println("Error in test case 1: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        System.out.println();
+        
+        // Test Case 2
         String testCase2 = "{ \"keys\": { \"n\": 10, \"k\": 7 }, \"1\": { \"base\": \"6\", \"value\": \"13444211440455345511\" }, \"2\": { \"base\": \"15\", \"value\": \"aed7015a346d635\" }, \"3\": { \"base\": \"15\", \"value\": \"6aeeb69631c227c\" }, \"4\": { \"base\": \"16\", \"value\": \"e1b5e05623d881f\" }, \"5\": { \"base\": \"8\", \"value\": \"316034514573652620673\" }, \"6\": { \"base\": \"3\", \"value\": \"2122212201122002221120200210011020220200\" }, \"7\": { \"base\": \"3\", \"value\": \"20120221122211000100210021102001201112121\" }, \"8\": { \"base\": \"6\", \"value\": \"20220554335330240002224253\" }, \"9\": { \"base\": \"12\", \"value\": \"45153788322a1255483\" }, \"10\": { \"base\": \"7\", \"value\": \"1101613130313526312514143\" } }";
         
-        // Solve test cases
-        solveAndPrint("Test Case 1", testCase1);
-        solveAndPrint("Test Case 2", testCase2);
-        
-        // Test edge cases
-        System.out.println("\n=== Edge Case Tests ===");
-        
-        // Test simple case
-        String simpleTest = "{ \"keys\": { \"n\": 3, \"k\": 2 }, \"1\": { \"base\": \"10\", \"value\": \"2\" }, \"2\": { \"base\": \"10\", \"value\": \"6\" }, \"3\": { \"base\": \"10\", \"value\": \"12\" } }";
-        solveAndPrint("Simple Linear Test", simpleTest);
-        
-        // Test error handling
+        System.out.println("=== TEST CASE 2 ===");
         try {
-            String errorTest = "{ \"keys\": { \"n\": 2, \"k\": 3 }, \"1\": { \"base\": \"10\", \"value\": \"1\" } }";
-            solveSecret(errorTest);
-        } catch (ShamirException e) {
-            System.out.println("\nExpected error caught: " + e.getMessage());
+            List<Point> points2 = parseInput(testCase2);
+            System.out.println("Parsed points (first 3):");
+            for (int i = 0; i < Math.min(3, points2.size()); i++) {
+                System.out.println("  " + points2.get(i));
+            }
+            System.out.println("  ... and " + (points2.size() - 3) + " more points");
+            
+            BigInteger secret2 = solveSecret(testCase2);
+            System.out.println("Secret (constant term): " + secret2);
+        } catch (Exception e) {
+            System.out.println("Error in test case 2: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 }
